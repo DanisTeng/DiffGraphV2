@@ -39,6 +39,37 @@ class Header:
         # the shared dict for all derivative orders.
         self.constant_derivative_channels = constant_derivative_channels
 
+    #TODO(huaiyuan):
+    # 1, Study and Mock core & from core, you write the following way of header creation.
+    # 2, In wrapped_function, the header will print_python_code_to_create_header.
+    # 3, Deprecate from_header_core globally, print header core don't need to be coupled with
+    # anyone.
+    # 4, Refactor CppFunction: no actual c++ file dependency. Just add a namespace.
+    # 5, Added UT to show how to create bare .h file. mock wrapped_function.
+    # 6, Full UT for the usage: Add pure sympy generation, add simple combination with user cpp and
+    # generated sympy files.
+    @staticmethod
+    def create_header(name: str) -> "Header":
+        """
+        WARNING: This function couples with print_python_code_to_create_header.
+        Need to change both for any update.
+        create_header(
+        name= "Radius"
+        inputs="double x, double y, double z, UserType c",
+        outputs = "double r, double e",
+        derivatives ="double D_r_D_x, double D_r_D_y=2.0"
+        supported_options = ["d0", "d1", "d2"])
+
+
+        :param code:
+        :return:
+        """
+
+        pass
+
+    def print_python_code_to_create_header(self) -> str:
+        pass
+
     def safe_check(self):
         """
         Check the validity of
@@ -475,8 +506,6 @@ class Header:
         return result
 
 # TODO(make empty header for user)
-
-
 
 # 我ADV可能产生一些对面看来有可能的action， 所以对面车出于安全考虑，不敢采取某些action (对面车决定采取绝对安全之策略),  因为对面车不敢采取某些action,  所以我目前存在action lead to safe state.
 
