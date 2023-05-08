@@ -1,4 +1,4 @@
-from typing import Dict,Any
+from typing import Dict,Any,Set
 from common import *
 import json
 
@@ -70,9 +70,24 @@ class Option:
         pass
 
 class AllOptions:
-    _all_options = [
-        Option(False, False),
-        Option(True, False),
-        Option(True, True),
-    ]
-    all_option_unordered_set = set(_all_options)
+
+    option_menu: Dict[str, Option] = {
+        "d0": Option(False, False),
+        "d1": Option(True, False),
+        "d2": Option(True, True),
+    }
+
+    full_option_names = set(option_menu.keys())
+    full_option_set = set(option_menu.values())
+
+    @classmethod
+    def build_option_set_from_names(cls, names: Set[str])->Set[Option]:
+        return {cls.option_menu[n] for n in names}
+
+
+
+
+
+
+
+

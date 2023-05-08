@@ -257,7 +257,7 @@ class FunctionBase:
         self.output_spec = output_spec.copy()
         self.input_spec = input_spec.copy()
         self.dependencies = set() if dependencies is None else dependencies.copy()
-        self.supported_options = AllOptions.all_option_unordered_set if supported_options is None else supported_options.copy()
+        self.supported_options = AllOptions.full_option_set if supported_options is None else supported_options.copy()
 
     def __call__(self, *args, **kwargs):
         # Check graph consistency
@@ -627,7 +627,7 @@ class Graph:
         return all_deps
 
     def evaluate_all_supported_options(self) -> Set[Option]:
-        all_ops = AllOptions.all_option_unordered_set
+        all_ops = AllOptions.full_option_set.copy()
         for func, _ in self._operations:
             all_ops.intersection_update(func.supported_options)
         return all_ops

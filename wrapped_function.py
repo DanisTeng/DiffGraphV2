@@ -25,7 +25,7 @@ class WrappedFunction(FunctionBase):
         if output_names is None:
             output_names = ["output_%d" % i for i in range(out_dim)]
         if required_options is None:
-            required_options = AllOptions.all_option_unordered_set.copy()
+            required_options = AllOptions.full_option_set.copy()
 
         # checks
         assert all([is_valid_lower_case_cpp_name(name) for name in input_names])
