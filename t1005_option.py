@@ -69,25 +69,32 @@ class Option:
         # parse from decorated cpp.
         pass
 
-class AllOptions:
 
+class AllOptions:
     option_menu: Dict[str, Option] = {
         "d0": Option(False, False),
         "d1": Option(True, False),
         "d2": Option(True, True),
     }
 
+    option_menu_inv: Dict[Option, str] = {}
+    for k,v in option_menu.items():
+        option_menu_inv[v] = k
+
     full_option_names = set(option_menu.keys())
     full_option_set = set(option_menu.values())
 
+    # The one with the largest
+    # number of output channels
+    max_output_channel_option = Option(True, True)
+
+
+
+
     @classmethod
-    def build_option_set_from_names(cls, names: Set[str])->Set[Option]:
-        return {cls.option_menu[n] for n in names}
+    def build_option_list_from_names(cls, names: List[str]) -> List[Option]:
+        return [cls.option_menu[n] for n in names]
 
-
-
-
-
-
-
-
+    @classmethod
+    def build_names_from_options_list(cls, options: List[Option]) -> List[str]:
+        return [cls.option_menu_inv[op] for op in options]

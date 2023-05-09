@@ -17,8 +17,10 @@ class Const1005:
     graph_constant_prefix = "G_CONSTANT_"
     graph_unused_prefix = "G_UNUSED_"
     input_channel_short = "input"
+    cpp_source_file_extension = ".cpp"
+    cpp_header_file_extension = ".h"
     built_in_name_sub_strings = [graph_output_pointer_prefix, sympy_var_prefix, unnamed_graph_var_prefix,
-                                  graph_output_prefix]
+                                 graph_output_prefix]
     indent = "  "
 
 
@@ -70,7 +72,6 @@ class VarType1005:
             return "const " + var_type + "&"
 
 
-
 def full_output_channels_with_derivatives(
         in_dim: int,
         out_dim: int,
@@ -83,8 +84,9 @@ def full_output_channels_with_derivatives(
     :param enable_2nd_order_derivative:
     :return: tuple of int representing the order and the channel of the output:
     (i,) Out[i].
-    (i,j) d_Out[i]_d_In[j]
-    (i,j,k) d2_Out[i]_d_In[j]_d_In[k]
+    (i,j) D_Out[i]_D_In[j]
+    (i,j,k) D2_Out[i]_D_In[j]_D_In[k]
+    Only j<=k channels are considered.
     """
     #
     channels = []
@@ -188,7 +190,7 @@ def remove_end_spaces(line: str):
         return ""
 
 
-def purify(string: str, chars_to_be_removed= ("\n","\r","\t")):
+def purify(string: str, chars_to_be_removed=("\n", "\r", "\t")):
     """
     Will remove use less chars defined by chars_to_be_removed
     The front space and end spaces will also be removed.
@@ -197,7 +199,7 @@ def purify(string: str, chars_to_be_removed= ("\n","\r","\t")):
     :return:
     """
     for c in chars_to_be_removed:
-        string= string.replace(c,"")
+        string = string.replace(c, "")
     return remove_front_spaces(remove_end_spaces(string))
 
 
@@ -208,11 +210,23 @@ def remove_end_char_if_exist(string: str, char: str):
     else:
         return string
 
-def remove_end_comma(string:str):
-    return remove_end_char_if_exist(",")
 
-def string_contains(string:str, sub_string:str):
-    return string.find(sub_string)>=0
+def remove_end_comma(string: str):
+    return remove_end_char_if_exist(string, ",")
+
+
+def remove_end_comma_in_quotation(string: str):
+    assert len(string) > 1
+    assert string[-1] == "\""
+    if string[-2] == ",":
+        return string[:-2] + string[-1]
+    else:
+        return string
+
+
+def string_contains(string: str, sub_string: str):
+    return string.find(sub_string) >= 0
+
 
 def remove_front_slashes(line: str):
     first_non_slash = None
@@ -225,3 +239,12 @@ def remove_front_slashes(line: str):
         return line[first_non_slash:]
     else:
         return ""
+
+
+def split_skip_empty(string: str, char: str) -> List[str]:
+    res = string.split(char)
+    res_skip_empty = []
+    for s in res:
+        if s != "":
+            res_skip_empty.append(s)
+    return res_skip_empty

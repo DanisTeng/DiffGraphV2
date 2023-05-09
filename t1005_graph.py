@@ -43,7 +43,8 @@ class Variable:
         return self.type in [self.TYPE_STATE_EXPR, self.TYPE_STATE_INPUT]
 
     def set_name(self, name: str):
-        self.graph.re_name(self.nick_name, name)
+        res, dbg = self.graph.re_name(self.nick_name, name)
+        assert res, dbg
 
     def defined_as_state_input(self, var_type: str = 'double'):
         assert self.type is self.TYPE_UN_DEFINED, "re definition not allowed"
@@ -238,7 +239,7 @@ class DefinitionResult:
 
 class FunctionBase:
     """
-    TODO(huaiyuan): does it support an option? answer in virtual.
+    The base class of all diff graph v2 functions.
     """
 
     def __init__(self, input_spec: List[str], output_spec: List[str], dependencies: Set[CppLibrary] = None,
@@ -450,18 +451,6 @@ class CppMemberFunction(FunctionBase):
 
 # interface function !! base class.
 
-
-class ConditionalFunction(FunctionBase):
-    # So we can avoid running a piece of code, by using gflag int.
-    # We only support gflag int.
-    # TODO(): implement with :
-    #  1, checking no - loop dependency
-    #  2, it is a little tricky, since each sub function are defining the output vars by themselves,
-    #  There can be disagreement in the output var_types and even existence.
-    #  That we need to merge them, their result types and names.
-    pass
-
-
 class GraphFieldManager:
     def __init__(self):
         self.existing_fields: Set[str] = set()
@@ -558,7 +547,6 @@ class GraphFieldManager:
 
 
 # DONE
-
 
 class Graph:
     """
@@ -801,7 +789,7 @@ class Graph:
         sub_function_option = Option(
             enable_1st_order_derivative=option.enable_2nd_order_derivative() or option.enable_1st_order_derivative(),
             enable_2nd_order_derivative=option.enable_2nd_order_derivative())
-        assert sub_function_option in AllOptions._all_options, "sub option Must be one of _all_options"
+        assert sub_function_option in AllOptions.full_option_set, "sub option Must be one of _all_options"
 
         manager = GraphFieldManager()
 
