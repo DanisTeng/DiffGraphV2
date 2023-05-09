@@ -1,4 +1,6 @@
 from t1005_graph import *
+from cpp_library import UserLibrary, CppLibrary
+import os
 
 
 class Header:
@@ -6,7 +8,7 @@ class Header:
     An agent for function interface.
     Each function name of option is guaranteed to be option.decorate(function_name).
 
-    What is an header?
+    What is a header?
     Contain full information for cpp function head generation.
     Always capable for compatibility check.
     An optioned header
@@ -15,7 +17,7 @@ class Header:
     may not need to consider namespace.
     """
 
-    _option_head = "//=====[Option]====="
+    _option_head = "// Option:"
     _constant_output_format = "%.6f"
 
     def __init__(self, function_name: str,
@@ -38,6 +40,355 @@ class Header:
 
         # the shared dict for all derivative orders.
         self.constant_derivative_channels = constant_derivative_channels
+
+    @staticmethod
+    def parse_sorted_output_channel_from_name(input_names, output_names, name_string: str) -> Tuple:
+        """
+        :param input_names: name of input variables
+        :param output_names: name of output variables
+        :param name_string: There are 3 supported types:
+        1,{output_name}
+        2,D_{output_name}_D_{input_name}
+        3,D2_{output_name}_D_{input_name_1}_D_{input_name_2}
+        :return: parsed tuple of int
+        if multiple input channel, they will be ordered such that their
+        channel indices have increasing order in the return value.
+        """
+        name_string = remove_front_spaces(remove_end_spaces(name_string))
+        items = split_skip_empty(name_string, "D")
+        n = len(items)
+        # 1 for 0 order, 4 for 1st order, 6 for 2nd order
+        warning = "invalid field name:" + name_string
+        assert n in {1, 2, 3}, warning
+
+        def input_index_from_name(name: str):
+            assert is_valid_lower_case_cpp_name(name), warning
+            assert name in input_names, warning
+            return input_names.index(name)
+
+        def output_index_from_name(name: str):
+            assert is_valid_lower_case_cpp_name(name), warning
+            assert name in output_names, warning
+            return output_names.index(name)
+
+        if n == 1:
+            # {output_name}
+            output_name = items[0]
+            return output_index_from_name(output_name),
+        elif n == 2:
+            # D_{output_name}_D_{input_name}
+            output_name = items[0][1:-1]
+            input_name = items[1][1:]
+            return output_index_from_name(output_name), input_index_from_name(input_name)
+        elif n == 3:
+            # D2_{output_name}_D_{input_name_1}_D_{input_name_2}
+            output_name = items[0][2:-1]
+            input_name_1 = items[1][1:-1]
+            input_name_2 = items[2][1:]
+            i1 = input_index_from_name(input_name_1)
+            i2 = input_index_from_name(input_name_2)
+            if i1 > i2:
+                i1, i2 = i2, i1
+            return output_index_from_name(output_name), i1, i2
+
+    @staticmethod
+    def find_missing_derivative_channels(in_dim: int, out_dim: int, option: Option,
+                                         existing_derivative_channels: Set[Tuple]):
+        """
+        a step to determine constant_derivative_channels.
+        :param out_dim: num of outputs
+        :param in_dim: num of inputs
+        :param existing_derivative_channels:
+        :param option:
+        :return:
+        """
+        full_channels = full_output_channels_with_derivatives(in_dim, out_dim,
+                                                              option.enable_1st_order_derivative(),
+                                                              option.enable_2nd_order_derivative())
+        missing_channels = []
+        for channel in full_channels:
+            if len(channel) > 1 and channel not in existing_derivative_channels:
+                missing_channels.append(channel)
+
+        return missing_channels
+
+    # TODO(huaiyuan):
+    # 1, Study and Mock core & from core, you write the following way of header creation. DONE
+    # 2, In wrapped_function, the header will print_python_code_to_create_header. DONE
+    # 3, Deprecate from_header_core globally, print header core don't need to be coupled with
+    # anyone. DONE
+    # 4, Refactor CppFunction: no actual c++ file dependency. Just add a namespace. DONE
+    # 5, Added UT to show how to create bare .h file. mock wrapped_function. DONE
+    # 6, Full UT for the usage: Add pure sympy generation, add simple combination with user cpp and
+    # generated sympy files. DONE
+    # 7, Auto diff UT
+
+    # This is the python -> header interface
+    @staticmethod
+    def create_header(function_name: str,
+                      inputs: str,
+                      outputs: str,
+                      derivatives: str,
+                      supported_options: List[str]) -> "Header":
+        """
+        WARNING: This function couples with print_python_code_to_create_header.
+        Need to change both for any update.
+        :param function_name: example: Add
+        :param inputs: example: x,y
+        :param outputs: example: z
+        :param derivatives: example: D_z_D_x, D2_z_D_x_D_x
+        :param supported_options: example: ["d0","d1","d2"]
+        :return:
+        """
+        inputs = purify(inputs)
+        outputs = purify(outputs)
+        derivatives = purify(derivatives)
+
+        # inputs.
+        input_items = split_skip_empty(inputs, ",")
+        input_items = [remove_end_spaces(remove_front_spaces(item)) for item in input_items]
+        input_names = []
+        input_spec = []
+        for item in input_items:
+            type_and_name = item.split(" ")
+            assert len(type_and_name) == 2, "create_header: Invalid inputs"
+            input_spec.append(type_and_name[0])
+            input_names.append(type_and_name[1])
+
+        # outputs.
+        output_items = split_skip_empty(outputs, ",")
+        output_items = [remove_end_spaces(remove_front_spaces(item)) for item in output_items]
+        output_names = []
+        output_spec = []
+        for item in output_items:
+            type_and_name = item.split(" ")
+            assert len(type_and_name) == 2, "create_header: Invalid outputs"
+            output_spec.append(type_and_name[0])
+            output_names.append(type_and_name[1])
+
+        # Constant derivative channels
+        # User declared: non-zero channels, otherwise taken as zero
+        derivative_items = split_skip_empty(derivatives, ",")
+        derivative_items = [remove_end_spaces(remove_front_spaces(item)) for item in derivative_items]
+
+        constant_output_channels = {}
+        existing_channels = set()
+        for item in derivative_items:
+            equator = item.find("=")
+            if equator == -1:
+                # Normal output
+                channel = Header.parse_sorted_output_channel_from_name(input_names, output_names, item)
+                existing_channels.add(channel)
+            else:
+                # Constant output
+                type_name_and_value = item.split("=")
+                assert len(type_name_and_value) == 2, "create_header: Invalid constant derivative"
+                v = float(type_name_and_value[1])
+                name = type_name_and_value[0]
+                channel = Header.parse_sorted_output_channel_from_name(input_names, output_names, name)
+                existing_channels.add(channel)
+                constant_output_channels[channel] = v
+
+        missing_derivatives = Header.find_missing_derivative_channels(in_dim=len(input_names),
+                                                                      out_dim=len(output_names),
+                                                                      option=AllOptions.max_output_channel_option,
+                                                                      existing_derivative_channels=existing_channels)
+        for ch in missing_derivatives:
+            constant_output_channels[ch] = 0.0
+
+        return Header(function_name=function_name,
+                      supported_options=AllOptions.build_option_list_from_names(supported_options),
+                      input_spec=input_spec,
+                      output_spec=output_spec,
+                      input_names=input_names,
+                      output_names=output_names,
+                      constant_derivative_channels=constant_output_channels)
+
+    # This is the header -> python interface
+    def print_python_code_to_create_header(self, left_value_name: str) -> List[str]:
+        """
+        WARNING: This function couples with create_header.
+        Update both when making change.
+        :param left_value_name:
+        :return: example:
+        {left_value_name} = \
+            Header.create_header(function_name="Add",
+                                 inputs="UserType c,"
+                                        "double x,"
+                                        "double y",
+                                 outputs="double z",
+                                 derivatives="D_z_D_x, D_z_D_y, D2_z_D_x_D_y = 0.0",
+                                 supported_options=[])
+        """
+        lines = list()
+        lines.append("%s = \\" % left_value_name)
+
+        func_call_left = "Header.create_header("
+        front_spaces = Const1005.indent + " " * len(func_call_left)
+
+        is_first_front_part = True
+
+        def get_front_part():
+            nonlocal is_first_front_part
+            if is_first_front_part:
+                is_first_front_part = False
+                return Const1005.indent + func_call_left
+            else:
+                return front_spaces
+
+        def append_field_and_multi_line_values(field: str, values: List[str]):
+            nonlocal lines
+            n = len(values)
+            assert n > 0
+            if n == 1:
+                # One line for the field
+                lines.append(get_front_part() + "%s=%s," % (field, values[0]))
+            else:
+                # Multiple lines for the field
+                lines.append(get_front_part() + "%s=%s" % (field, values[0]))
+                extra_front = " " * (len(field) + 1)
+                for j in range(1, n - 1):
+                    lines.append(get_front_part() + extra_front + values[j])
+                lines.append(get_front_part() + extra_front + values[n - 1] + ",")
+
+        append_field_and_multi_line_values("function_name", ["\"" + self.function_name + "\""])
+
+        # inputs
+        inputs_value = []
+        for i in range(len(self.input_names)):
+            inputs_value.append("\"%s %s,\"" % (self.input_spec[i], self.input_names[i]))
+        if inputs_value:
+            inputs_value[-1] = remove_end_comma_in_quotation(inputs_value[-1])
+        else:
+            inputs_value = ["\"\""]
+        append_field_and_multi_line_values("inputs", inputs_value)
+
+        # outputs
+        outputs_value = []
+        for i in range(len(self.output_names)):
+            outputs_value.append("\"%s %s,\"" % (self.output_spec[i], self.output_names[i]))
+        if outputs_value:
+            outputs_value[-1] = remove_end_comma_in_quotation(outputs_value[-1])
+        else:
+            outputs_value = ["\"\""]
+        append_field_and_multi_line_values("outputs", outputs_value)
+
+        # derivatives
+        derivatives_value = []
+        for channel in self.output_channels(AllOptions.max_output_channel_option):
+            if len(channel) == 1:
+                # not derivative
+                continue
+            field_name = self.output_channel_name(channel)
+            derivatives_value.append("\"%s,\"" % field_name)
+        for channel, value in self.constant_derivative_channels.items():
+            if value == 0:
+                continue
+            field_name = self.output_channel_name(channel)
+            field_value = self._constant_output_format % value
+            derivatives_value.append("\"%s = %s,\"" % (field_name, field_value))
+
+        if derivatives_value:
+            derivatives_value[-1] = remove_end_comma_in_quotation(derivatives_value[-1])
+        else:
+            derivatives_value = ["\"\""]
+        append_field_and_multi_line_values("derivatives", derivatives_value)
+
+        # supported options
+        option_names = AllOptions.build_names_from_options_list(self.supported_options)
+        append_field_and_multi_line_values("supported_options", [str(option_names)])
+
+        # final ket.
+        lines[-1] = lines[-1][:-1] + ")"
+
+        return lines
+
+    # This is the header -> .h file interface
+    def dump_to_h_file(self, user_library: UserLibrary,
+                       force_update=True,
+                       namespace: List[str] = None,
+                       dependencies: Set[CppLibrary] = None,
+                       author_script: str = "None"):
+        """
+        :param user_library: cpp header file destination
+        :param force_update:  Will override existing file if true
+        :param namespace: ["math","util"] -> math::util
+        :param dependencies: other library objects
+        :param author_script: /my/folder/some_script.py
+        :return:
+        """
+        path = user_library.lib_abs_path()
+        name = user_library.lib_name()
+        header_file = os.path.join(path, name + Const1005.cpp_header_file_extension)
+
+        if not os.path.exists(path) and force_update:
+            os.makedirs(path)
+        if os.path.exists(header_file) and force_update:
+            os.remove(header_file)
+
+        assert os.path.exists(path), "<%s> not exist." % path
+        assert not os.path.exists(header_file), "<%s> already exist." % header_file
+
+        if namespace is None:
+            namespace = []
+
+        def write_lines(lines: List[str], indent=0):
+            for l in lines:
+                fp.write(str(Const1005.indent * indent) + l + "\n")
+
+        def empty_line():
+            fp.write("\n")
+
+        namespace_string = "::".join(namespace)
+
+        # Write to .h file.
+        with open(header_file, "w") as fp:
+            write_lines(user_library.head_comments_h(author_script))
+            write_lines(["#pragma once"])
+            empty_line()
+
+            # includes
+            builtin_includes = []
+            includes = []
+            for dep in dependencies:
+                include_name = dep.include_name()
+                if include_name[0] == "<":
+                    builtin_includes.append("#include " + include_name)
+                else:
+                    includes.append("#include " + include_name)
+            builtin_includes.sort()
+            includes.sort()
+
+            if builtin_includes:
+                write_lines(builtin_includes)
+                empty_line()
+            write_lines(includes)
+            empty_line()
+
+            # namespace
+            if namespace_string != "":
+                write_lines(["namespace %s {" % namespace_string])
+
+            # Tell user how to create this header using python
+            python_comment = ["/*", "Python to create this header:"]
+            python_comment += self.print_python_code_to_create_header(left_value_name="python_object")
+            python_comment.append("*/")
+            write_lines(python_comment, indent=1 if namespace_string != "" else 0)
+
+            empty_line()
+
+            # header core part
+            write_lines(self.print_header_core(), indent=1 if namespace_string != "" else 0)
+
+            # namespace
+            if namespace_string != "":
+                write_lines(["}  // namespace %s" % namespace_string])
+
+            write_lines(user_library.tail_comments_h())
+            empty_line()
+
+    # The .h -> python interface is achieved by
+    # printing the python code as comment in .h file
 
     def safe_check(self):
         """
@@ -83,7 +434,7 @@ class Header:
         """
         a step to determine constant_derivative_channels.
         :param option:
-        :param channels:
+        :param given_channels:
         :return:
         """
         in_dim = len(self.input_spec)
@@ -111,17 +462,19 @@ class Header:
         assert len(channel) > 0
         return self.output_spec[channel[0]]
 
-    def output_channel_from_name(self, name_string: str) -> Tuple:
+    def sorted_output_channel_from_name(self, name_string: str) -> Tuple:
         """
-        Pre-requisite:
+        Pre-condition:
         self.input_names, self.output_names are ready
-        :param name_string:
-        :return:
+        :param name_string: There are 3 supported types:
+        1,{output_name}
+        2,D_{output_name}_D_{input_name}
+        3,D2_{output_name}_D_{input_name_1}_D_{input_name_2}
+        :return: parsed tuple of int
+        if multiple input channel, they will be ordered such that their
+        channel indices have increasing order in the return value.
         """
-        #CONTINUE
-        # out
-        # D2_out_D_in1_D_in2
-        items = name_string.split("_")
+        items = name_string.split("D")
         n = len(items)
         # 1 for 0 order, 4 for 1st order, 6 for 2nd order
         warning = "invalid field name:" + name_string
@@ -137,17 +490,25 @@ class Header:
             assert name in self.output_names, warning
             return self.output_names.index(name)
 
-        for item in items:
-            if is_valid_lower_case_cpp_name(item):
-                assert (item in self.input_names) or (item in self.output_names), \
-                    "invalid field name:" + name_string
-
         if n == 1:
-            return output_index_from_name(items[0]),
+            # {output_name}
+            output_name = items[0]
+            return output_index_from_name(output_name),
         elif n == 4:
-            return output_index_from_name(items[1]), input_index_from_name(items[3])
+            # D_{output_name}_D_{input_name}
+            output_name = items[0][1:-1]
+            input_name = items[1][1:]
+            return output_index_from_name(output_name), input_index_from_name(input_name)
         elif n == 6:
-            return output_index_from_name(items[1]), input_index_from_name(items[3]), input_index_from_name(items[5])
+            # D2_{output_name}_D_{input_name_1}_D_{input_name_2}
+            output_name = items[0][2:-1]
+            input_name_1 = items[1][1:-1]
+            input_name_2 = items[2][1:]
+            i1 = input_index_from_name(input_name_1)
+            i2 = input_index_from_name(input_name_2)
+            if i1 > i2:
+                i1, i2 = i2, i1
+            return output_index_from_name(output_name), i1, i2
 
     def print_header_core(self):
         """
@@ -169,7 +530,6 @@ class Header:
             result.append(self._option_head)
             for line in option_lines:
                 result.append("//" + line)
-            result.append(self._option_head)
 
             # Print function declaration
             final_function_name = option.decorate(self.function_name)
@@ -260,161 +620,6 @@ class Header:
 
         return result
 
-    @staticmethod
-    def _lines_to_function_and_fields(lines: List[str]):
-        """
-        :param lines: some result generated by  function_with_fields_to_lines
-        MUST avoid empty lines.
-        :return: function_final_name, fields
-        """
-        assert lines, "input can't be empty"
-
-
-        head_with_first_field = purify(lines[0])
-        assert head_with_first_field[:5] == "void ", "invalid arg"
-        left_bra = head_with_first_field.find("(")
-        assert left_bra > 5
-        function_final_name = purify(head_with_first_field[5:left_bra])
-
-        fields = []
-        should_keep_parse = False
-        rest_of_first_line = purify(head_with_first_field[left_bra + 1:])
-        if rest_of_first_line[-2:] == ");":
-            content = rest_of_first_line[:-2]
-            if purify(content) == "":
-                pass
-            else:
-                fields.append(content)
-        else:
-            # at least two fields
-            fields.append(remove_end_comma(rest_of_first_line))
-            should_keep_parse = True
-
-        if should_keep_parse:
-            for i in range(1, len(lines)):
-                f_line = purify(lines[i])
-                if f_line[-2:] != ");":
-                    fields.append(remove_end_comma(f_line))
-                else:
-                    fields.append(remove_end_comma(f_line[:-2]))
-                    break
-
-        return function_final_name, fields
-
-    def from_header_core(self, lines: List[str]):
-        """
-        from .h
-        A rule: when you can't see a field it is 0.0.
-        :return:
-        """
-
-        # Step 1 extract supported options and locate the header of each option.
-        self.supported_options = []
-        option_header_start = []
-        option_header_end = []
-
-        def get_header_lines(option_id):
-            res = []
-            for i in range(option_header_start[option_id],
-                           option_header_end[option_id]):
-                if lines[i] != "":
-                    res.append(lines[i])
-            return res
-
-
-        is_parsing_option = False
-        option_lines = []
-        for i in range(len(lines)):
-            line = remove_end_spaces(remove_front_spaces(lines[i]))
-            is_head = line == self._option_head
-
-            if is_parsing_option:
-                if not is_head:
-                    option_lines.append(line)
-                else:
-                    option = Option()
-                    option.from_string("\n".join(option_lines), True)
-                    self.supported_options.append(option)
-                    option_header_start.append(i + 1)
-                    is_parsing_option = False
-                    option_lines = []
-            else:
-                if is_head:
-                    is_parsing_option = True
-                    if option_header_start:
-                        option_header_end.append(i)
-        assert option_header_start, "No option declaration in header!"
-        option_header_end.append(len(lines))
-        assert len(option_header_start) == len(option_header_end)
-
-        # Step 2. parse default option for input and output names specs.
-        default_option = Option()
-        assert default_option in self.supported_options, "header must have default option"
-
-        default_option_lines = get_header_lines(self.supported_options.index(default_option))
-        self.function_name, default_fields = self._lines_to_function_and_fields(default_option_lines)
-        self.input_names = []
-        self.input_spec = []
-        self.output_names = []
-        self.output_spec = []
-
-        for field in default_fields:
-            # only two cases: input, output
-            star = field.find("*")
-            if star >= 0:
-                # output
-                self.output_names.append(purify(field[star + 1:]))
-                self.output_spec.append(purify(field[:star]))
-            else:
-                pure_field = purify(field)
-                space = pure_field.find(" ")
-                assert space > 0, "invalid field"
-                self.input_names.append(purify(pure_field[space + 1:]))
-                self.input_spec.append(purify(pure_field[:space]))
-
-        self.safe_check()
-
-        # Step 3. parse all other options to collect constant derivative outputs,
-        # How do you know those zero neglected? for each option, their full output channels are different, use that.
-        self.constant_derivative_channels = {}
-        for i in range(len(self.supported_options)):
-            option = self.supported_options[i]
-            head = get_header_lines(i)
-
-            _, fields = self._lines_to_function_and_fields(head)
-
-            existing_output_channels = set()
-            for field in fields:
-                # 3 type of fields: input, output, const derivative output.
-                pure_field = purify(field)
-                if pure_field[:2] == "/*" and pure_field[-2:] == "*/":
-                    # constant output
-                    const_output_field = pure_field[2:-2]
-                    equator = const_output_field.find("=")
-                    assert equator >= 0, "invalid field"
-                    field_name = purify(const_output_field[:equator])
-                    value = float(const_output_field[equator + 1:])
-
-                    channel = self.output_channel_from_name(field_name)
-                    existing_output_channels.add(channel)
-                    self.constant_derivative_channels[channel] = value
-                else:
-                    star = pure_field.find("*")
-                    if star >= 0:
-                        # normal output
-                        field_name = purify(pure_field[star + 1:])
-                        existing_output_channels.add(self.output_channel_from_name(field_name))
-
-            missing_channels = self.find_missing_output_channels(option, existing_output_channels)
-            for channel in missing_channels:
-                self.constant_derivative_channels[channel] = 0.0
-
-    @staticmethod
-    def create_from_header_core(lines: List[str]) -> "Header":
-        header = Header("", [], [], [], [], [], {}, False)
-        header.from_header_core(lines)
-        return header
-
     def print_call(self, full_context: FullContext, prefix="") -> CallResult:
         """
         GongJuRen
@@ -473,72 +678,3 @@ class Header:
                 result.constant_output_channels[channel] = value
 
         return result
-
-# TODO(make empty header for user)
-
-
-
-# 我ADV可能产生一些对面看来有可能的action， 所以对面车出于安全考虑，不敢采取某些action (对面车决定采取绝对安全之策略),  因为对面车不敢采取某些action,  所以我目前存在action lead to safe state.
-
-# 这个根源， 对面车看来我有可能的action.  对称的， 又取决于我感觉对面有可能执行的action.
-
-
-# game theory 对于碳排放的例子， 给出的答案是: 如果只有一步， 危险临近， 只要对面有几率选3，2， 我就不会冒险， 就会老实选1.
-#   1,2,3
-# 1
-# 2     x
-# 3   x x
-
-# 这个我会认为对面一些 action 总是有极小概率发生的话， 会怎样呢?
-
-
-# adv_reg = f(g(adv_reg + error) + error) , 假设所有next step 的安全程度已经确定， 我们能解这个方程么？
-
-# 这是一个正反馈的函数， 即 adv_reg = adv_reg 有点这个意思 ， 我们想办法让右边的影响因子小一些， adv_reg = 0.8 * adv_reg + ??
-
-
-# adv_reg_final : 我们采用的策略
-# adv_reg_in_obs_view: 对面认为我们可能采用的策略
-
-# obs_reg_final = g(adv_reg_in_obs_view): 对面采用的策略
-# obs_reg_in_adv_view: 我们认为对面的策略
-
-# adv_reg_final = f(obs_reg_in_adv_view)
-# obs_reg_final = g(adv_reg_in_obs_view)
-
-# reg_in_view = SomeOverestimate (reg_final), 即，高估对手. 算上执行误差。（这一行不太对， 我感觉此处没有因果律）
-# 严于律己， 宽以待人。
-
-# 但是这个平衡点在哪里呀？
-
-# 比方说，对于任意dbs, 这个平衡点都是可以飘的。至少目前看是这样。
-# 如何保证安全？ 对面很理性， 对面选择猛度 1， 我们亦然， 。。。 肯定不安全。
-
-# dodge wild 就完事儿了。。。。后车！
-
-# f, g： 不是你进我退的关系？  avr = (1-（(1- avr- 0.1) + 0.1）) 是随遇平衡。
-
-# 最简法则： 两边都无限高估对手的执行误差， 都认为对面虽然理性， 但是手残， 所以最后采取 dodge wild 策略。
-
-# 不能以对手会高估我为前提吧？ 对手大概会看扁我的胆量， 同时他还手残。
-
-# obs_f = g(adv_f + 0.1), adv_f = f(obs_f + 0.1)
-# 1 - (1-adv_f - 0.1) + 0.1 = adv_f
-
-# 也就是说， 这个式子确实是个恒等式，我们不能靠它求解所谓的“社交距离”， “社交平衡点” 之类的东西。
-# 我们可以用它更新is_safe么？ 这个在不同人眼中也是不一样的呀！
-
-
-# 这个矛盾点在于， 既要利用到对面的理性特征， 又不能将对面的理性特征建立在自己的行为上。
-
-
-
-#冲
-
-
-
-
-
-
-
-

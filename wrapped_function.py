@@ -25,7 +25,7 @@ class WrappedFunction(FunctionBase):
         if output_names is None:
             output_names = ["output_%d" % i for i in range(out_dim)]
         if required_options is None:
-            required_options = AllOptions.all_option_unordered_set.copy()
+            required_options = AllOptions.full_option_set.copy()
 
         # checks
         assert all([is_valid_lower_case_cpp_name(name) for name in input_names])
@@ -127,23 +127,29 @@ class WrappedFunction(FunctionBase):
     def optional_header(self) -> "Header":
         return self.header
 
-    # TODO(huaiyuan): support dumping multiple functions
-    def dump_to_lib(self, library: UserLibrary, force_update=True,
-                    namespace: List[str] = None):
+    def dump_to_cpp_file(self,
+                         library: UserLibrary,
+                         force_update=True,
+                         namespace: List[str] = None,
+                         author_script: str = "None"):
+        """
+        WARNING: This function contains file operations.
+        :param library: cpp file destination
+        :param force_update: Will override existing file if true
+        :param namespace: ["math","util"] -> math::util
+        :param author_script: /my/folder/some_script.py
+        :return:
+        """
         path = library.lib_abs_path()
         name = library.lib_name()
-        header_file = os.path.join(path, name + ".h")
-        cpp_file = os.path.join(path, name + ".cpp")
+        cpp_file = os.path.join(path, name + Const1005.cpp_source_file_extension)
 
         if not os.path.exists(path) and force_update:
             os.makedirs(path)
-        if os.path.exists(header_file) and force_update:
-            os.remove(header_file)
         if os.path.exists(cpp_file) and force_update:
             os.remove(cpp_file)
 
         assert os.path.exists(path), "<%s> not exist." % path
-        assert not os.path.exists(header_file), "<%s> already exist." % header_file
         assert not os.path.exists(cpp_file), "<%s> already exist." % cpp_file
 
         if namespace is None:
@@ -158,33 +164,8 @@ class WrappedFunction(FunctionBase):
 
         namespace_string = "::".join(namespace)
 
-        # CONTINUE (huaiyuan): move this to smart header
-        # parse from file name
-        with open(header_file, "w") as fp:
-            write_lines(library.head_comments_h())
-            empty_line()
-
-            # includes
-            includes = []
-            for dep in self.dependencies:
-                includes.append("#include " + dep.include_name())
-            write_lines(includes)
-            empty_line()
-
-            if namespace_string != "":
-                write_lines(["namespace %s {" % namespace_string])
-            # header core
-            write_lines([library.header_begin_comments_h()])
-            write_lines(self.header.print_header_core(), indent=1 if namespace_string != "" else 0)
-            write_lines([library.header_end_comments_h()])
-
-            if namespace_string != "":
-                write_lines(["}  // namespace %s" % namespace_string])
-            write_lines(library.tail_comments_h())
-            empty_line()
-
         with open(cpp_file, "w") as fp:
-            write_lines(library.head_comments_cpp())
+            write_lines(library.head_comments_cpp(author_script))
             empty_line()
 
             # includes
@@ -205,6 +186,25 @@ class WrappedFunction(FunctionBase):
             write_lines(library.tail_comments_cpp())
             empty_line()
 
+    def dump_to_lib(self, library: UserLibrary, force_update=True,
+                    namespace: List[str] = None, author_script: str = "None"):
+        """
+        WARNING: This function contains file operations.
+        :param library: cpp file destination
+        :param force_update: Will override existing file if true
+        :param namespace: ["math","util"] -> math::util
+        :param author_script: /my/folder/some_script.py
+        :return:
+        """
+        # Ask header to dump a .h file.
+
+        self.header.dump_to_h_file(user_library=library, force_update=force_update,
+                                   namespace=namespace, dependencies=self.dependencies,
+                                   author_script=author_script)
+
+        self.dump_to_cpp_file(library=library, force_update=force_update,
+                              namespace=namespace, author_script=author_script)
+
 
 def wrap_graph_function(graph_function: GraphFunction, function_name: str) -> WrappedFunction:
     return WrappedFunction(graph_function,
@@ -212,6 +212,7 @@ def wrap_graph_function(graph_function: GraphFunction, function_name: str) -> Wr
                            [variable.nick_name for variable in graph_function.graph_input_variables],
                            # It is in principle, safe to not add the out_ prefix here.
                            # There are 2 scopes for wrapper: wp graph and interface.
+                           # TODO(huaiyuan): Try to remove this out_ prefix.
                            ["out_" + variable.nick_name for variable in graph_function.graph_output_variables],
                            required_options=graph_function.supported_options)
 
